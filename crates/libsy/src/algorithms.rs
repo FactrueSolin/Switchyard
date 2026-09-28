@@ -8,6 +8,7 @@
 
 pub mod advisor_gate;
 pub mod composite;
+pub mod decision_model;
 mod escalation;
 pub mod fall_through;
 pub mod llm_class;

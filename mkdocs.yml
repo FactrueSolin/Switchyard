@@ -30,6 +30,7 @@ nav:
   - Routing:
       - Overview: routing_algorithms/overview.md
       - Task (LLM Classifier): routing_algorithms/llm_classifier_routing.md
+      - Decision-Model Routing: routing_algorithms/decision_model_routing.md
       - Execution (Stage Router): routing_algorithms/stage_router_routing.md
       - Plan/Execute Routing: routing_algorithms/plan_execute_routing.md
       - Sub-Agent-Aware Routing: routing_algorithms/subagent_routing.md

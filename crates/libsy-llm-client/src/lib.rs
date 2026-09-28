@@ -18,6 +18,7 @@
 
 pub mod backend;
 pub mod client;
+pub mod decision;
 pub mod error;
 pub mod metrics;
 mod observability;
@@ -27,6 +28,7 @@ pub mod run;
 
 pub use backend::{Backend, DEFAULT_MAX_RETRIES, HttpBackendConfig};
 pub use client::{AuxiliaryOperation, ModelConfig, TranslatingLlmClient};
+pub use decision::DecisionModelClient;
 pub use error::{LlmClientError, Result};
 pub use observation::{LlmCallObservation, RunObservation, RunObserver};
 pub use raw::RawResponse;

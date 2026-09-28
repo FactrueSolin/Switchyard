@@ -8,16 +8,19 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use libsy::{
     AdvisorGate, AdvisorGateConfig, Algorithm, ClassifierContractConfig, ClassifierResponseFormat,
     ClassifyTrigger, CompositeRouter, CompositeRouterConfig, CustomClassifierConfig,
-    CustomClassifierPolicy, EscalationJudgeConfig, GateTrigger, HandoffNoteConfig,
-    LlmClassifierConfig, LlmFallback, LlmTaskClassifier, Noop, Passthrough, PickerMode,
-    PlanExecute, PlanExecuteConfig, Random, StageRouter, StageRouterConfig, SubagentRouter,
-    SubagentRouterConfig, TaskClassifierConfig, ToolSemantics,
+    CustomClassifierPolicy, DecisionCaller, DecisionModelRouter, DecisionModelRouterConfig,
+    EscalationJudgeConfig, GateTrigger, HandoffNoteConfig, LlmClassifierConfig, LlmFallback,
+    LlmTaskClassifier, Noop, Passthrough, PickerMode, PlanExecute, PlanExecuteConfig, Random,
+    StageRouter, StageRouterConfig, SubagentRouter, SubagentRouterConfig, TaskClassifierConfig,
+    ToolSemantics,
 };
 use serde::Deserialize;
+use switchyard_llm_client::DecisionModelClient;
 use switchyard_protocol::{Category, ModelId};
 
 /// Error returned when an algorithm description cannot be constructed.
@@ -352,6 +355,41 @@ pub enum AlgorithmSpec {
         #[serde(flatten)]
         config: LlmClassifierRouteConfig,
     },
+    /// A dedicated decision model picks the strong or efficient tier.
+    DecisionModel {
+        /// The high-intelligence tier.
+        strong_target: String,
+        /// The cost-efficient tier.
+        weak_target: String,
+        /// Target used when the decision is low-confidence or the call fails.
+        default_target: String,
+        /// The provider's OpenAI-compatible root, e.g.
+        /// `https://{workspace}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`.
+        decision_base_url: String,
+        /// Environment variable holding the decision model's API key.
+        decision_api_key_env: String,
+        /// The decision model name. Defaults to `decision-model-preview`.
+        #[serde(default)]
+        decision_model: Option<String>,
+        /// Lowest probability for a tier option that still routes that tier,
+        /// from 0 to 1. Omit to trust the decision model's own pick: its chosen
+        /// option routes directly, and only `other` falls to `default_target`.
+        #[serde(default)]
+        confidence_threshold: Option<f64>,
+        /// How often the decision model runs.
+        #[serde(default)]
+        classify_trigger: ClassifyTrigger,
+        /// Reuses the session's target by hashing the first user message when no
+        /// session ID is available. Needs a retaining trigger.
+        #[serde(default)]
+        message_hash_fallback: bool,
+        /// Trailing turns the decision model sees. Defaults to two.
+        #[serde(default)]
+        recent_turn_window: Option<usize>,
+        /// Decision call deadline in milliseconds. Unset is unbounded.
+        #[serde(default)]
+        decision_timeout_ms: Option<u64>,
+    },
     /// Picks a tier per turn by scoring signals from recent tool results.
     StageRouter {
         #[serde(flatten)]
@@ -601,6 +639,21 @@ impl AlgorithmSpec {
                 }
                 names
             }
+            Self::DecisionModel {
+                strong_target,
+                weak_target,
+                default_target,
+                ..
+            } => {
+                let mut names = vec![
+                    strong_target.as_str(),
+                    weak_target.as_str(),
+                    default_target.as_str(),
+                ];
+                names.sort();
+                names.dedup();
+                names
+            }
             // The advisor is judge-only: reviews go through its own client,
             // so it is not a completion (or count_tokens) destination.
             Self::Advisor {
@@ -729,6 +782,25 @@ impl AlgorithmSpec {
                     vec![stage.capable_target.clone(), stage.efficient_target.clone()],
                 ),
             ]),
+            Self::DecisionModel {
+                strong_target,
+                weak_target,
+                default_target,
+                ..
+            } => {
+                let mut any = vec![
+                    strong_target.clone(),
+                    weak_target.clone(),
+                    default_target.clone(),
+                ];
+                any.sort();
+                any.dedup();
+                category_models([
+                    (Category::Capable, vec![strong_target.clone()]),
+                    (Category::Efficient, vec![weak_target.clone()]),
+                    (Category::Any, any),
+                ])
+            }
             Self::Advisor {
                 executor_target,
                 advisor_target,
@@ -776,6 +848,7 @@ impl AlgorithmSpec {
             | Self::Passthrough { .. }
             | Self::PlanExecute { .. }
             | Self::LlmClassifier { .. }
+            | Self::DecisionModel { .. }
             | Self::StageRouter { .. }
             | Self::Auto { .. }
             | Self::Composite { .. }
@@ -1407,6 +1480,74 @@ fn build_algorithm(
             let algorithm = AdvisorGate::new(config).map_err(|error| {
                 AlgorithmConfigError::with_source(
                     format!("advisor route {route_name}: {error}"),
+                    error,
+                )
+            })?;
+            Ok(Arc::new(algorithm))
+        }
+        AlgorithmSpec::DecisionModel {
+            strong_target,
+            weak_target,
+            default_target,
+            decision_base_url,
+            decision_api_key_env,
+            decision_model,
+            confidence_threshold,
+            classify_trigger,
+            message_hash_fallback,
+            recent_turn_window,
+            decision_timeout_ms,
+        } => {
+            let strong = resolve_target_model_id(route_name, strong_target, targets)?;
+            let weak = resolve_target_model_id(route_name, weak_target, targets)?;
+            let default = resolve_target_model_id(route_name, default_target, targets)?;
+            if decision_base_url.trim().is_empty() {
+                return Err(AlgorithmConfigError::new(format!(
+                    "decision_model route {route_name}: decision_base_url must not be empty"
+                )));
+            }
+            let api_key = std::env::var(decision_api_key_env).map_err(|error| {
+                AlgorithmConfigError::with_source(
+                    format!(
+                        "decision_model route {route_name}: could not read api_key_env {decision_api_key_env}: {error}"
+                    ),
+                    error,
+                )
+            })?;
+            if api_key.is_empty() {
+                return Err(AlgorithmConfigError::new(format!(
+                    "decision_model route {route_name}: api_key_env {decision_api_key_env} is empty"
+                )));
+            }
+            let caller: Arc<dyn DecisionCaller> = Arc::new(
+                DecisionModelClient::new(
+                    decision_base_url,
+                    decision_model
+                        .clone()
+                        .unwrap_or_else(|| "decision-model-preview".to_string()),
+                    Some(api_key),
+                    decision_timeout_ms.map(Duration::from_millis),
+                )
+                .map_err(|error| {
+                    AlgorithmConfigError::with_source(
+                        format!("decision_model route {route_name}: {error}"),
+                        error,
+                    )
+                })?,
+            );
+            let config = DecisionModelRouterConfig {
+                caller,
+                strong_target: strong,
+                weak_target: weak,
+                default_target: default,
+                confidence_threshold: *confidence_threshold,
+                classify_trigger: *classify_trigger,
+                message_hash_fallback: *message_hash_fallback,
+                recent_turn_window: *recent_turn_window,
+            };
+            let algorithm = DecisionModelRouter::new(config).map_err(|error| {
+                AlgorithmConfigError::with_source(
+                    format!("decision_model route {route_name}: {error}"),
                     error,
                 )
             })?;

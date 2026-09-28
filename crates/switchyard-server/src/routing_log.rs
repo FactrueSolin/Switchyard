@@ -12,6 +12,7 @@ use std::time::SystemTime;
 
 use humantime::format_rfc3339_millis;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use switchyard_protocol::{Metadata, ModelId, Usage};
 
 use crate::usage_metrics::token_usage;
@@ -48,8 +49,11 @@ impl RoutingLog {
         model: &str,
         tier: Option<&str>,
         usage: &Usage,
+        evidence: Option<&Value>,
     ) -> std::io::Result<()> {
         let usage = token_usage(usage);
+        let (evidence_choice, evidence_probabilities, evidence_state_chars) =
+            evidence_fields(evidence);
         let record = RoutingRecord {
             ts: format_rfc3339_millis(SystemTime::now()).to_string().into(),
             route_id: context.route_id.into(),
@@ -66,6 +70,9 @@ impl RoutingLog {
             completion_tokens: usage.completion_tokens,
             reasoning_tokens: usage.reasoning_tokens,
             total_tokens: usage.prompt_tokens.saturating_add(usage.completion_tokens),
+            evidence_choice,
+            evidence_probabilities,
+            evidence_state_chars,
         };
         let mut line = serde_json::to_vec(&record).map_err(std::io::Error::other)?;
         line.push(b'\n');
@@ -142,6 +149,35 @@ impl RoutingLogContext {
     }
 }
 
+/// Pulls the typed fields the routing log keeps from an algorithm evidence blob.
+///
+/// Algorithms attach different evidence shapes; only the decision model's
+/// choice, probability distribution, and transcript length are what routing
+/// records need for classifier analysis.
+fn evidence_fields(
+    evidence: Option<&Value>,
+) -> (Option<String>, Option<BTreeMap<String, f64>>, Option<u64>) {
+    let Some(evidence) = evidence else {
+        return (None, None, None);
+    };
+    let choice = evidence
+        .get("choice")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let probabilities = evidence
+        .get("probabilities")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(option, probability)| {
+                    probability.as_f64().map(|p| (option.clone(), p))
+                })
+                .collect()
+        });
+    let state_chars = evidence.get("state_chars").and_then(Value::as_u64);
+    (choice, probabilities, state_chars)
+}
+
 /// One appended routing record, and the read schema [`snapshot`] parses back,
 /// so the written and expected shapes cannot drift apart. Missing fields
 /// default so a record from an older schema still contributes what it has.
@@ -167,6 +203,12 @@ struct RoutingRecord<'a> {
     completion_tokens: u64,
     reasoning_tokens: u64,
     total_tokens: u64,
+    /// The decision model's chosen option, when the algorithm attached one.
+    evidence_choice: Option<String>,
+    /// The decision model's probability over every option, when attached.
+    evidence_probabilities: Option<BTreeMap<String, f64>>,
+    /// Characters of the transcript the decision model scored, when attached.
+    evidence_state_chars: Option<u64>,
 }
 
 /// Session totals returned by the routing stats endpoint.
@@ -285,6 +327,49 @@ mod tests {
                 .origin
                 .is_none()
         );
+    }
+
+    /// The decision model's verdict survives in the record for classifier analysis.
+    #[test]
+    fn append_keeps_the_decision_evidence_fields() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("routing.jsonl");
+        let mut log = RoutingLog::new(&path).expect("open log");
+        let usage = Usage::default();
+        let evidence = serde_json::json!({
+            "source": "decision_model",
+            "choice": "strong",
+            "confidence": 0.44,
+            "probabilities": {"strong": 0.68, "weak": 0.03, "other": 0.29},
+            "state_chars": 1234,
+        });
+        log.append(
+            RoutingLogContext::from_metadata(&Metadata::default()),
+            "strong-model",
+            None,
+            &usage,
+            Some(&evidence),
+        )
+        .expect("append with evidence");
+        log.append(
+            RoutingLogContext::from_metadata(&Metadata::default()),
+            "weak-model",
+            None,
+            &usage,
+            None,
+        )
+        .expect("append without evidence");
+
+        let content = fs::read_to_string(&path).expect("read log");
+        let lines: Vec<&str> = content.lines().collect();
+        let first: serde_json::Value = serde_json::from_str(lines[0]).expect("parse");
+        assert_eq!(first["evidence_choice"], "strong");
+        assert_eq!(first["evidence_probabilities"]["strong"], 0.68);
+        assert_eq!(first["evidence_state_chars"], 1234);
+        let second: serde_json::Value = serde_json::from_str(lines[1]).expect("parse");
+        assert!(second["evidence_choice"].is_null());
+        assert!(second["evidence_probabilities"].is_null());
+        assert!(second["evidence_state_chars"].is_null());
     }
 
     /// Only the requested session is counted, absent fields fall back to zero

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use opentelemetry::{KeyValue, global};
+use serde_json::Value;
 use switchyard_protocol::{LlmResponse, LlmResponseChunk, Response, Usage};
 
 use crate::SharedRoutingLog;
@@ -21,6 +22,7 @@ pub(crate) fn observe(
     stats: StatsAccumulator,
     cache_eligible: f64,
     routing_log: Option<(SharedRoutingLog, RoutingLogContext)>,
+    evidence: Option<Value>,
 ) -> Response {
     let Response {
         llm_response,
@@ -33,7 +35,7 @@ pub(crate) fn observe(
         LlmResponse::Agg(agg) => {
             record_terminal(&stats, &agg.usage, &model, started, cache_eligible);
             if let Some((log, context)) = routing_log {
-                log.append(context, &model, None, &agg.usage);
+                log.append(context, &model, None, &agg.usage, evidence.as_ref());
             }
             LlmResponse::Agg(agg)
         }
@@ -76,7 +78,7 @@ pub(crate) fn observe(
                     {
                         record_terminal(&stats, usage, &model, started, cache_eligible);
                         if let Some((log, context)) = routing_log.as_ref() {
-                            log.append(context.clone(), &model, None, usage);
+                            log.append(context.clone(), &model, None, usage, evidence.as_ref());
                         }
                         recorded = true;
                     }
@@ -89,7 +91,7 @@ pub(crate) fn observe(
                     let usage = latest_usage.unwrap_or_default();
                     record_terminal(&stats, &usage, &model, started, cache_eligible);
                     if let Some((log, context)) = routing_log {
-                        log.append(context, &model, None, &usage);
+                        log.append(context, &model, None, &usage, evidence.as_ref());
                     }
                 }
             };
@@ -221,6 +223,7 @@ mod tests {
             stats.clone(),
             0.0,
             Some((log.clone(), context)),
+            None,
         );
 
         let LlmResponse::Stream(mut observed) = observed.llm_response else {

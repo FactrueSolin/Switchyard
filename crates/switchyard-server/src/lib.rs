@@ -188,8 +188,13 @@ impl SharedRoutingLog {
         model: &str,
         tier: Option<&str>,
         usage: &Usage,
+        evidence: Option<&Value>,
     ) {
-        if let Err(error) = self.writer.lock().append(context, model, tier, usage) {
+        if let Err(error) = self
+            .writer
+            .lock()
+            .append(context, model, tier, usage, evidence)
+        {
             tracing::warn!(path = %self.path.display(), %error, "routing log append failed");
         }
     }
@@ -434,9 +439,14 @@ const CLASSIFIER_TIER: &str = "classifier";
 fn stats_observer(
     stats: StatsAccumulator,
     classifier_log: Option<(SharedRoutingLog, routing_log::RoutingLogContext)>,
+    evidence_slot: Arc<Mutex<Option<Value>>>,
 ) -> RunObserver {
     Arc::new(move |observation| match observation {
-        RunObservation::Outcome(_) => {}
+        RunObservation::Outcome(metadata) => {
+            if let Some(evidence) = metadata.evidence.clone() {
+                *evidence_slot.lock() = Some(evidence);
+            }
+        }
         RunObservation::AnswerCall(call) => {
             let latency_ms = call.duration.as_secs_f64() * 1_000.0;
             if call.is_success {
@@ -456,6 +466,7 @@ fn stats_observer(
                         &call.selected_model,
                         Some(CLASSIFIER_TIER),
                         usage,
+                        None,
                     );
                 }
                 stats.record_classifier_success(
@@ -1053,9 +1064,11 @@ async fn handle_llm_request(
     });
     // Only the Codex namespace mapping is needed downstream, not the whole request.
     let request_extensions = request.llm_request.extensions.clone();
+    let evidence_slot = Arc::new(Mutex::new(None));
     let observer = stats_observer(
         state.stats.clone(),
         state.routing_log.clone().zip(routing_log_context.clone()),
+        Arc::clone(&evidence_slot),
     );
 
     let output = match route.execute(request, Some(observer)).await {
@@ -1085,6 +1098,7 @@ async fn handle_llm_request(
             .as_ref()
             .map(|probe| state.stats.prefix_eligibility(served_model, probe))
             .unwrap_or(0.0);
+        let evidence = evidence_slot.lock().clone();
         usage_metrics::observe(
             response,
             served_model.as_str(),
@@ -1092,6 +1106,7 @@ async fn handle_llm_request(
             state.stats,
             cache_eligible,
             state.routing_log.zip(routing_log_context),
+            evidence,
         )
     } else {
         response
@@ -1697,7 +1712,11 @@ mod tests {
         headers.insert("proxy_x_session_id", "session-1".parse().expect("header"));
         let metadata = metadata_from_headers(headers);
         let context = routing_log::RoutingLogContext::from_metadata(&metadata);
-        let observer = stats_observer(StatsAccumulator::default(), Some((log.clone(), context)));
+        let observer = stats_observer(
+            StatsAccumulator::default(),
+            Some((log.clone(), context)),
+            Arc::new(Mutex::new(None)),
+        );
 
         let call = |model: &str, answer: bool| {
             let observation = LlmCallObservation {

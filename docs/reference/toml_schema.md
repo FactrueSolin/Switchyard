@@ -293,6 +293,28 @@ Classifier prompts must not contain `{{RESPONSE_SCHEMA}}`. Switchyard supplies
 the schema automatically: through the structured-output request in `json_schema`
 mode, or in the prompt in `json_object` mode.
 
+### `decision_model`
+
+Picks the efficient or capable model with a dedicated decision model. The
+model answers a fixed choice question in one forward pass without generating
+text. The decision call is configured inline in the route table; it does not
+use `[llm_clients]`. See
+[Decision-Model Routing](../routing_algorithms/decision_model_routing.md).
+
+| Key | Required | Default | Meaning |
+|---|:---:|---|---|
+| `strong_target` | Yes | — | High-intelligence tier. |
+| `weak_target` | Yes | — | Cost-efficient tier. Must differ from `strong_target`. |
+| `default_target` | Yes | — | Target used when the decision is low-confidence or the call fails. |
+| `decision_base_url` | Yes | — | The provider's OpenAI-compatible root, e.g. `https://{workspace}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`. The runner appends `/systemone`. |
+| `decision_api_key_env` | Yes | — | Environment variable holding the decision model's API key. Must name a set, non-empty variable. |
+| `decision_model` | No | `decision-model-preview` | Model name sent in the request body. |
+| `confidence_threshold` | No | unset | Lowest probability for a tier option in the decision model's distribution that still routes that tier. The router reads `P(strong)` and `P(weak)` from the returned distribution; it does not use the API's reported confidence, which does not track the distribution. In `[0, 1]`. Unset trusts the decision model's own pick: its chosen option routes directly, and only `other` falls to `default_target`. |
+| `classify_trigger` | No | `every_request` | When the decision model runs. `every_request` decides every request, tool continuations included. `user_turn` decides each new user message and keeps that target across intervening tool calls only when requests carry a session ID; without a session ID, it behaves like `every_request`. `new_session` decides once and reuses that target for the session. |
+| `message_hash_fallback` | No | `false` | Retains the target against a hash of the first user message when a request carries no session ID. Requires `classify_trigger = "new_session"` or `"user_turn"`. |
+| `recent_turn_window` | No | `2` | Trailing turns sent to the decision model. At least `1`. |
+| `decision_timeout_ms` | No | unset | Deadline in milliseconds for the decision call. Unset is unbounded. |
+
 ### `stage_router`
 
 Scores tool signals to pick a tier per turn. See

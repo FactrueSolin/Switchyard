@@ -9,6 +9,7 @@ pub use core::algorithm::{
     Algorithm, CallModel, Driver, RoutingOutcome, RuntimeModels, Step, StepStream, drive,
 };
 pub use core::classifier::{Classification, Classifier, Score};
+pub use core::decision::{DecisionCaller, DecisionVerdict, tier};
 pub use core::outcome_metadata::OutcomeMetadata;
 pub use core::processor::{Event, Processor};
 pub use core::state::{State, StateValue};
@@ -19,6 +20,9 @@ pub use error::{DriverError, LibsyError, Result};
 mod algorithms;
 pub use algorithms::advisor_gate::{AdvisorGate, AdvisorGateConfig, GateTrigger};
 pub use algorithms::composite::{CompositeRouter, CompositeRouterConfig};
+pub use algorithms::decision_model::{
+    DEFAULT_CONFIDENCE_THRESHOLD, DecisionModelRouter, DecisionModelRouterConfig,
+};
 pub use algorithms::llm_class::{
     CustomClassifierConfig, CustomClassifierPolicy, LlmClassifierConfig, LlmTaskClassifier,
     TaskClassifierConfig,

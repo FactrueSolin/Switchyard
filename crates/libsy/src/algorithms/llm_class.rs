@@ -14,7 +14,7 @@ use switchyard_protocol::{Category, ContentBlock, Message, Role};
 use super::escalation;
 use super::fall_through::FallThrough;
 use super::util::DEFAULT_JUDGE_MAX_OUTPUT_TOKENS;
-use super::util::affinity::{AffinityRouter, ClassifyTrigger};
+use super::util::affinity::{ClassifyTrigger, affinity_router};
 use super::util::classifier_contract::{
     ClassifierContract, ClassifierContractConfig, ClassifierResponseFormat,
 };
@@ -520,24 +520,6 @@ impl JudgePolicy for CustomPolicyRuntime {
             Self::TargetSelector(policy) => policy.to_classification(verdict, driver),
         }
     }
-}
-
-/// Builds the affinity router a trigger calls for, if any.
-fn affinity_router(
-    trigger: ClassifyTrigger,
-    message_hash_fallback: bool,
-) -> Option<Arc<AffinityRouter>> {
-    let router = match trigger {
-        ClassifyTrigger::EveryRequest => return None,
-        ClassifyTrigger::NewSession => AffinityRouter::new(),
-        ClassifyTrigger::UserTurn => AffinityRouter::new().with_release_on_user_turn(),
-    };
-    let router = if message_hash_fallback {
-        router.with_message_hash_fallback()
-    } else {
-        router
-    };
-    Some(Arc::new(router))
 }
 
 /// Routes requests through a capability, escalation, or custom classifier mode.

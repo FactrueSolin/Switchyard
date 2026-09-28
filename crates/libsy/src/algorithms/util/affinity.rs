@@ -19,7 +19,10 @@
 
 use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -49,7 +52,7 @@ pub enum ClassifyTrigger {
 
 /// Anthropic carries tool results as a `Role::User` message, so role alone cannot tell a
 /// human turn from a tool continuation.
-fn is_user_turn(message: &Message) -> bool {
+pub(crate) fn is_user_turn(message: &Message) -> bool {
     message.role == Role::User
         && !message
             .content
@@ -282,10 +285,27 @@ pub(crate) fn evict_if_full<V>(retained: &mut HashMap<RoutingIdentity, V>) {
     }
 }
 
+/// Builds the affinity router a `ClassifyTrigger` calls for, if any.
+pub(crate) fn affinity_router(
+    trigger: ClassifyTrigger,
+    message_hash_fallback: bool,
+) -> Option<Arc<AffinityRouter>> {
+    let router = match trigger {
+        ClassifyTrigger::EveryRequest => return None,
+        ClassifyTrigger::NewSession => AffinityRouter::new(),
+        ClassifyTrigger::UserTurn => AffinityRouter::new().with_release_on_user_turn(),
+    };
+    let router = if message_hash_fallback {
+        router.with_message_hash_fallback()
+    } else {
+        router
+    };
+    Some(Arc::new(router))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use std::sync::Arc;
 
     use switchyard_protocol::{LlmRequest, Metadata, ToolResult, text_request};

@@ -148,6 +148,10 @@ runs/**/*.*
 third party/**/*.*
 
 # Scratch / local working files
+# Local decision-model credentials and notes
+dev-server/decision-model.env
+dev-server/decision-model-logs.md
+
 scratch/
 plans/
 .experiments/
@@ -166,3 +170,5 @@ pytest-of-*/
 # codex
 .codex
 openthoughts-tblite/
+# routing log written by dev-server/decision-model.sh
+routing.jsonl

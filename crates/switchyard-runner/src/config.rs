@@ -1846,6 +1846,88 @@ confidence_threshold = 0.5
         assert!(message.contains("is empty"));
     }
 
+    const DECISION_KEY_ENV: &str = "SWITCHYARD_CONFIG_TEST_DECISION_KEY";
+    const DECISION_KEY_ENV_B: &str = "SWITCHYARD_CONFIG_TEST_DECISION_KEY_B";
+
+    fn decision_model_config(key_env: &str) -> String {
+        format!(
+            r#"{VALID_CONFIG}
+[routes.decision]
+id = "switchyard/decision"
+type = "decision_model"
+strong_target = "strong"
+weak_target = "weak"
+default_target = "weak"
+decision_base_url = "https://ws.example.test/compatible-mode/v1"
+decision_api_key_env = "{key_env}"
+"#
+        )
+    }
+
+    #[test]
+    fn decision_model_route_builds() -> RunnerResult<()> {
+        unsafe {
+            std::env::set_var(DECISION_KEY_ENV, "test-key");
+        }
+        let result = runner_from_toml(&decision_model_config(DECISION_KEY_ENV));
+        unsafe {
+            std::env::remove_var(DECISION_KEY_ENV);
+        }
+        let runner = result?;
+        let ids: Vec<_> = runner.models().map(|model| model.id.as_str()).collect();
+        assert!(ids.contains(&"switchyard/decision"));
+        Ok(())
+    }
+
+    #[test]
+    fn decision_model_route_validates_its_settings() {
+        const MISSING_ENV: &str = "SWITCHYARD_CONFIG_TEST_DECISION_KEY_B_MISSING";
+        let missing_key = decision_model_config(DECISION_KEY_ENV_B).replace(
+            &format!("decision_api_key_env = \"{DECISION_KEY_ENV_B}\""),
+            &format!("decision_api_key_env = \"{MISSING_ENV}\""),
+        );
+        assert!(error_message(&missing_key).contains(MISSING_ENV));
+
+        unsafe {
+            std::env::set_var(DECISION_KEY_ENV_B, "test-key");
+        }
+
+        let empty_base = decision_model_config(DECISION_KEY_ENV_B).replace(
+            "decision_base_url = \"https://ws.example.test/compatible-mode/v1\"",
+            "decision_base_url = \"\"",
+        );
+        assert!(error_message(&empty_base).contains("decision_base_url must not be empty"));
+
+        let same_tiers = decision_model_config(DECISION_KEY_ENV_B).replace(
+            "weak_target = \"weak\"
+default_target = \"weak\"",
+            "weak_target = \"strong\"
+default_target = \"weak\"",
+        );
+        let same_tiers_message = error_message(&same_tiers);
+        assert!(
+            same_tiers_message.contains("strong_target and weak_target must be different"),
+            "{same_tiers_message}"
+        );
+
+        let bad_threshold = decision_model_config(DECISION_KEY_ENV_B).replace(
+            "decision_base_url",
+            "confidence_threshold = 1.5\n\
+             decision_base_url",
+        );
+        assert!(error_message(&bad_threshold).contains("confidence_threshold"));
+
+        let unknown_field = decision_model_config(DECISION_KEY_ENV_B).replace(
+            "type = \"decision_model\"",
+            "type = \"decision_model\"\nflavor = \"mild\"",
+        );
+        assert!(error_message(&unknown_field).contains("flavor"));
+
+        unsafe {
+            std::env::remove_var(DECISION_KEY_ENV_B);
+        }
+    }
+
     #[test]
     fn forward_auth_rejects_conflicting_credentials() {
         let competing_auth = VALID_CONFIG.replacen(
