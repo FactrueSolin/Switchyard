@@ -7,6 +7,7 @@ members = [
     "crates/libsy",
     "crates/libsy-llm-client",
     "crates/prefill-router",
+    "crates/switchyard-control",
     "crates/switchyard-py",
     "crates/protocol",
     "crates/switchyard-nemo-relay-plugin",
@@ -26,6 +27,7 @@ repository = "https://github.com/NVIDIA-NeMo/Switchyard"
 rust-version = "1.96.1"
 
 [workspace.dependencies]
+arc-swap = "1.9"
 async-stream = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
@@ -52,7 +54,10 @@ switchyard-translation = { path = "crates/switchyard-translation", version = "0.
 strum_macros = "0.28"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+toml_edit = "0.25"
 tracing = { version = "0.1", default-features = false, features = ["attributes", "std"] }
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v7"] }
+
+include_dir = "0.7"

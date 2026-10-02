@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use libsy::RoutingOutcome;
 use serde_json::Value;
@@ -15,7 +16,7 @@ use crate::{ModelCapabilities, Route, RunnerError};
 
 /// Immutable named route table.
 pub struct Runner {
-    routes: Vec<(ModelId, Route)>,
+    routes: Vec<(ModelId, Arc<Route>)>,
     fallback_base_url: Option<String>,
     provider_api_keys: Vec<String>,
 }
@@ -60,7 +61,10 @@ impl Runner {
     /// Pre-condition: There must be at least one route.
     pub fn new(routes: Vec<(ModelId, Route)>) -> Self {
         Self {
-            routes,
+            routes: routes
+                .into_iter()
+                .map(|(id, route)| (id, Arc::new(route)))
+                .collect(),
             fallback_base_url: None,
             provider_api_keys: Vec::new(),
         }
@@ -84,11 +88,14 @@ impl Runner {
     }
 
     /// Returns the route registered for a model.
-    pub fn route(&self, model: &str) -> Option<&Route> {
+    ///
+    /// The returned handle keeps the route alive independently of this table,
+    /// so in-flight requests are unaffected by a later table replacement.
+    pub fn route(&self, model: &str) -> Option<Arc<Route>> {
         self.routes
             .iter()
             .find(|(id, _)| id.as_str() == model)
-            .map(|(_, route)| route)
+            .map(|(_, route)| Arc::clone(route))
     }
 
     /// Iterates over configured routes in caller-provided order.

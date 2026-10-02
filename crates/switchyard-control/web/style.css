@@ -1,0 +1,159 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #2a2f3a;
+  --text: #d8dde6;
+  --muted: #8b93a3;
+  --accent: #4f8cff;
+  --error: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+header h1 { font-size: 18px; margin: 0; }
+
+#auth { display: flex; gap: 8px; align-items: center; }
+
+#token { width: 240px; }
+
+nav#tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 22px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+nav#tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+nav#tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+main { padding: 20px 22px 60px; }
+
+h2 { font-size: 15px; margin: 26px 0 10px; }
+h2:first-child { margin-top: 0; }
+h3 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
+
+p.hint { color: var(--muted); margin: 0 0 10px; max-width: 720px; }
+
+button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover { border-color: var(--accent); }
+
+button.ghost {
+  background: none;
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+button.ghost:hover { color: var(--text); border-color: var(--accent); }
+
+nav#tabs button, #tabs button { border-radius: 0; }
+
+input, select, textarea {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+textarea {
+  width: 100%;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+input, select { font-family: inherit; }
+
+.form {
+  display: grid;
+  grid-template-columns: 220px 1fr 1fr 1fr auto;
+  gap: 8px;
+  margin: 10px 0;
+  align-items: center;
+}
+
+#section-form { grid-template-columns: 200px 1fr auto; }
+#section-form textarea { grid-column: 1 / -1; }
+#secret-form { grid-template-columns: 260px 1fr auto; }
+
+.actions { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
+
+.status { color: var(--muted); }
+.status.error { color: var(--error); }
+
+.table-wrap { overflow-x: auto; margin-bottom: 10px; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th, td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.row-actions { display: flex; gap: 6px; white-space: nowrap; }
+.row-actions button { padding: 4px 10px; font-size: 12px; }
+
+#decisions-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+
+#history-source {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.hidden { display: none; }

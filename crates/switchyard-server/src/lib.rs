@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwap;
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, Query, Request as HttpRequest, State};
@@ -156,11 +157,18 @@ struct DecisionLlmClientResponse {
     base_url: String,
 }
 
+/// Routing table and the output redactor derived from it, swapped
+/// atomically when the deployment configuration changes.
+#[derive(Clone)]
+struct Deployment {
+    runner: Arc<Runner>,
+    redactor: Arc<redaction::Redactor>,
+}
+
 /// Shared server state used by all endpoint handlers.
 #[derive(Clone)]
 pub struct ServerState {
-    runner: Arc<Runner>,
-    redactor: Arc<redaction::Redactor>,
+    deployment: Arc<ArcSwap<Deployment>>,
     fallback_http: reqwest::Client,
     metrics: prometheus::Registry,
     stats: StatsAccumulator,
@@ -219,16 +227,36 @@ impl ServerState {
             metrics.clone(),
             runner.models().map(|model| model.algorithm),
         );
-        let redactor = redaction::Redactor::new(runner.provider_api_keys());
+        let redactor = Arc::new(redaction::Redactor::new(runner.provider_api_keys()));
         Ok(Self {
-            redactor: Arc::new(redactor),
-            runner: Arc::new(runner),
+            deployment: Arc::new(ArcSwap::from(Arc::new(Deployment {
+                runner: Arc::new(runner),
+                redactor,
+            }))),
             fallback_http,
             metrics,
             stats,
             routing_log: None,
             track_cache_eligibility: tracking_enabled_from_env(),
         })
+    }
+
+    /// Replaces the route table and output redactor.
+    ///
+    /// In-flight requests keep serving from the previous deployment; new
+    /// requests observe the replacement. The caller validates `runner` first
+    /// (for example through `Runner::from_toml`); this method cannot fail.
+    pub fn swap_deployment(&self, runner: Runner) {
+        let redactor = Arc::new(redaction::Redactor::new(runner.provider_api_keys()));
+        self.deployment.store(Arc::new(Deployment {
+            runner: Arc::new(runner),
+            redactor,
+        }));
+    }
+
+    /// The deployment every new request resolves against.
+    pub(crate) fn deployment(&self) -> Arc<Deployment> {
+        self.deployment.load_full()
     }
 
     /// Enables durable per-request routing records at `path`.
@@ -238,29 +266,33 @@ impl ServerState {
     }
 
     /// Returns the route model IDs served by the configured algorithms.
-    pub fn models(&self) -> impl Iterator<Item = &str> {
-        self.runner.models().map(|model| model.id.as_str())
+    pub fn models(&self) -> Vec<String> {
+        let deployment = self.deployment.load();
+        deployment
+            .runner
+            .models()
+            .map(|model| model.id.as_str().to_string())
+            .collect()
     }
 
     /// Returns the caller credential family used by `model`, if any.
     pub fn caller_auth_kind(&self, model: &str) -> Option<&'static str> {
-        self.runner
+        let deployment = self.deployment.load();
+        deployment
+            .runner
             .route(model)
             .and_then(|route| route.caller_auth())
             .map(|kind| kind.as_str())
     }
 
-    fn route_for_model(&self, model: &str) -> Option<&Route> {
-        self.runner.route(model)
-    }
-
     fn decision_response(
         &self,
+        deployment: &Deployment,
         route_model: &ModelId,
         outcome: &RoutingOutcome,
         response: Option<Value>,
     ) -> Option<DecisionResponse> {
-        let description = self.runner.describe_decision(route_model, outcome)?;
+        let description = deployment.runner.describe_decision(route_model, outcome)?;
         let convert = |target: DecisionTarget| DecisionTargetResponse {
             target: target.target,
             model: target.model,
@@ -591,7 +623,8 @@ async fn openai_responses(
 
 // Forwards unmatched requests unchanged to the configured API root.
 async fn proxy_unmatched(State(state): State<ServerState>, request: HttpRequest) -> Response {
-    let Some(base_url) = state.runner.fallback_base_url() else {
+    let deployment = state.deployment();
+    let Some(base_url) = deployment.runner.fallback_base_url() else {
         return not_found().await;
     };
     let (mut parts, body) = request.into_parts();
@@ -769,7 +802,7 @@ async fn decision(
         }
         None => None,
     };
-    match state.decision_response(&route_model, &outcome, response) {
+    match state.decision_response(&route.deployment, &route_model, &outcome, response) {
         Some(response) => Json(response).into_response(),
         None => {
             server_error("routing outcome contains a model with no callable target configuration")
@@ -978,7 +1011,7 @@ fn resolve_route(
     metadata: Metadata,
     mut body: Value,
     wire_format: WireFormat,
-) -> std::result::Result<(&Route, Request), Response> {
+) -> std::result::Result<(ResolvedRoute, Request), Response> {
     // Only trusted translation hops may supply exact request preservation state.
     // Strip it before decoding and retaining the raw body for upstream replay.
     if let Some(metadata) = body.get_mut("metadata").and_then(Value::as_object_mut) {
@@ -998,7 +1031,8 @@ fn resolve_route(
                 "invalid_request_error",
             )
         })?;
-    let route = state.route_for_model(&requested_model).ok_or_else(|| {
+    let deployment = state.deployment();
+    let route = deployment.runner.route(&requested_model).ok_or_else(|| {
         error_response(
             StatusCode::NOT_FOUND,
             format!("No route registered for model {requested_model}"),
@@ -1039,7 +1073,22 @@ fn resolve_route(
         raw_request: Some(body),
         metadata: Some(metadata),
     };
-    Ok((route, request))
+    Ok((ResolvedRoute { deployment, route }, request))
+}
+
+/// A route resolved against a pinned deployment. Requests keep serving from
+/// the deployment they resolved against even after a live configuration swap.
+struct ResolvedRoute {
+    deployment: Arc<Deployment>,
+    route: Arc<Route>,
+}
+
+impl std::ops::Deref for ResolvedRoute {
+    type Target = Route;
+
+    fn deref(&self) -> &Route {
+        &self.route
+    }
 }
 
 /// Resolves and executes an LLM request, attaching route identity when durable logging is enabled.
@@ -1119,7 +1168,7 @@ async fn handle_llm_request(
         wire_format,
         response_model,
         request_extensions,
-        Arc::clone(&state.redactor),
+        Arc::clone(&state.deployment.load().redactor),
     ) {
         Ok(response) => response,
         Err(error) => return server_error(error.to_string()),
@@ -1467,8 +1516,9 @@ fn error_response(
 }
 
 async fn models(State(state): State<ServerState>) -> Json<Value> {
+    let deployment = state.deployment();
     Json(model_list_payload(
-        state
+        deployment
             .runner
             .models()
             .map(|model| (model.id.as_str(), model.capabilities)),
@@ -1600,9 +1650,12 @@ fn startup_banner(options: &ServerRunOptions, state: &ServerState, color: bool) 
     let scheme = if options.is_tls() { "https" } else { "http" };
     let listen_url = url_for_addr(scheme, options.addr);
     let request_url = request_url_for_addr(scheme, options.addr);
-    let routes = state.models().collect::<Vec<_>>();
+    let routes = state.models();
     let route_list = routes.join(", ");
-    let example_model = routes.first().copied().unwrap_or("switchyard/route");
+    let example_model = routes
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "switchyard/route".to_string());
     let example_body = json!({
         "model": example_model,
         "messages": [{"role": "user", "content": "Hello from Switchyard"}],
@@ -1636,10 +1689,7 @@ fn render_startup_banner_art(color: bool) -> String {
 }
 
 fn dry_run_summary(state: &ServerState) -> String {
-    format!(
-        "server OK: {}",
-        state.models().collect::<Vec<_>>().join(", ")
-    )
+    format!("server OK: {}", state.models().join(", "))
 }
 
 fn url_for_addr(scheme: &'static str, addr: SocketAddr) -> String {
@@ -1694,11 +1744,58 @@ fn endpoint_listing(has_routing_log: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use switchyard_llm_client::LlmCallObservation;
+    use std::collections::HashMap;
+
+    use libsy::Noop;
+    use switchyard_llm_client::{ClientRouter, LlmCallObservation};
+    use switchyard_runner::RuntimeModels;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::{Notify, oneshot};
 
     use super::*;
+
+    fn noop_route(id: &str) -> (ModelId, Route) {
+        (
+            ModelId::from(id),
+            Route::new(
+                Arc::new(Noop {}),
+                ClientRouter::new(HashMap::new()),
+                None,
+                ModelCapabilities::default(),
+                None,
+                None,
+                Vec::new(),
+                RuntimeModels::new(HashMap::new()),
+            ),
+        )
+    }
+
+    /// A live swap replaces the route table and the derived output redactor;
+    /// handles taken before the swap keep resolving the old table.
+    #[test]
+    fn swap_deployment_replaces_routes_and_redactor() {
+        let state = ServerState::from_runner(Runner::new(vec![noop_route("switchyard/a")]))
+            .expect("initial state");
+        assert_eq!(state.models(), ["switchyard/a".to_string()]);
+
+        let before = state.deployment();
+        state.swap_deployment(
+            Runner::new(vec![noop_route("switchyard/b")])
+                .with_provider_api_keys(vec!["swap-key".into()]),
+        );
+
+        assert_eq!(state.models(), ["switchyard/b".to_string()]);
+        let after = state.deployment();
+        assert!(before.runner.route("switchyard/a").is_some());
+        assert!(before.runner.route("switchyard/b").is_none());
+        assert!(after.runner.route("switchyard/a").is_none());
+        assert_eq!(
+            after.redactor.text("Bearer swap-key".to_string()),
+            "Bearer [REDACTED]"
+        );
+        assert!(before.redactor.is_empty());
+        assert_eq!(before.redactor.text("swap-key".to_string()), "swap-key");
+    }
 
     /// A successful judge call lands in the per-session routing snapshot under its
     /// model id with the classifier tier, while routed calls stay off the observer's

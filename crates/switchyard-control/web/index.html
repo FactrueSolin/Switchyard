@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Switchyard Control</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1 data-i18n="brand"></h1>
+    <div id="auth">
+      <input type="password" id="token" data-i18n-ph="token_placeholder" autocomplete="off">
+      <button id="connect" data-i18n="connect"></button>
+      <button id="lang-toggle" class="ghost" title="Switch language"></button>
+      <span id="auth-status"></span>
+    </div>
+  </header>
+  <nav id="tabs">
+    <button data-tab="overview" class="active" data-i18n="tab_overview"></button>
+    <button data-tab="models" data-i18n="tab_models"></button>
+    <button data-tab="strategies" data-i18n="tab_strategies"></button>
+    <button data-tab="secrets" data-i18n="tab_secrets"></button>
+    <button data-tab="history" data-i18n="tab_history"></button>
+  </nav>
+  <main>
+    <section id="tab-overview" class="tab">
+      <h2 data-i18n="routes"></h2>
+      <div id="routes-view"></div>
+      <h2 data-i18n="recent_decisions"></h2>
+      <div id="decisions-bar">
+        <input id="decisions-model" data-i18n-ph="decisions_model_ph">
+        <button id="decisions-load" data-i18n="load"></button>
+      </div>
+      <div id="decisions-view"></div>
+      <h2 data-i18n="raw_config"></h2>
+      <textarea id="config-editor" rows="22" spellcheck="false"></textarea>
+      <div class="actions">
+        <button id="save-config" data-i18n="apply_config"></button>
+        <button id="load-template" data-i18n="load_template"></button>
+        <span id="config-status" class="status"></span>
+      </div>
+    </section>
+    <section id="tab-models" class="tab hidden">
+      <h2 data-i18n="tab_models"></h2>
+      <div id="models-view"></div>
+      <h2 data-i18n="add_or_update"></h2>
+      <form id="model-form" class="form">
+        <input id="model-name" data-i18n-ph="name" required>
+        <input id="model-base-url" data-i18n-ph="base_url_ph" required>
+        <input id="model-model" data-i18n-ph="model_ph" required>
+        <input id="model-key-env" data-i18n-ph="key_env_ph">
+        <button type="submit" data-i18n="save"></button>
+      </form>
+      <div id="models-status" class="status"></div>
+    </section>
+    <section id="tab-strategies" class="tab hidden">
+      <h2 data-i18n="tab_strategies"></h2>
+      <p class="hint" data-i18n="strategies_intro"></p>
+      <div id="sections-view"></div>
+      <h2 id="section-edit-title" data-i18n="add_entry"></h2>
+      <form id="section-form" class="form">
+        <select id="section-select">
+          <option value="routes" data-i18n="sec_routes"></option>
+          <option value="llm_clients" data-i18n="sec_clients"></option>
+          <option value="targets" data-i18n="sec_targets"></option>
+        </select>
+        <input id="section-name" data-i18n-ph="entry_name_ph" required>
+        <textarea id="section-block" rows="12" data-i18n-ph="section_block_ph" spellcheck="false"></textarea>
+        <button type="submit" data-i18n="save"></button>
+      </form>
+      <div id="sections-status" class="status"></div>
+    </section>
+    <section id="tab-secrets" class="tab hidden">
+      <h2 data-i18n="tab_secrets"></h2>
+      <div id="secrets-view"></div>
+      <form id="secret-form" class="form">
+        <input id="secret-name" data-i18n-ph="env_name_ph" required>
+        <input id="secret-value" type="password" data-i18n-ph="value_ph" required>
+        <button type="submit" data-i18n="set"></button>
+      </form>
+      <div id="secrets-status" class="status"></div>
+    </section>
+    <section id="tab-history" class="tab hidden">
+      <h2 data-i18n="config_history"></h2>
+      <div id="history-view"></div>
+      <pre id="history-source" class="hidden"></pre>
+      <div id="history-status" class="status"></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

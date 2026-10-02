@@ -1,0 +1,56 @@
+# Switchyard deployment template.
+#
+# Copy the pieces you need, adjust the values, then click "Apply configuration".
+# Every `api_key_env` below must exist in the Secrets tab (or in the process
+# environment) before this file will validate.
+
+schema_version = 1
+
+# --- LLM clients: the provider endpoints the router forwards to -------------
+# format is one of: openai_chat | openai_responses | anthropic_messages
+
+[llm_clients.primary]
+format = "openai_chat"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[llm_clients.anthropic]
+format = "anthropic_messages"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+
+# --- Targets: named models served through a client -------------------------
+
+[targets.strong]
+id = "gpt-4o"
+llm_client = "primary"
+
+[targets.weak]
+id = "claude-sonnet-4-5"
+llm_client = "anthropic"
+
+# --- Decision models: named System One endpoints a route can reference -----
+# A route points at one with `decision = "<name>"` instead of repeating the
+# inline decision_base_url / decision_model / decision_api_key_env fields.
+
+[decision_models.judge]
+base_url = "https://api.typesafe.ai/v1"
+model = "jev-latest"
+api_key_env = "TYPESAFE_API_KEY"
+
+# --- Routes: the models clients send requests to --------------------------
+
+[routes.smart]
+id = "smart"
+type = "decision_model"
+strong_target = "strong"
+weak_target = "weak"
+default_target = "weak"
+decision = "judge"
+# confidence_threshold = 0.6      # optional: route on the probability distribution
+# classify_trigger = "user_turn"  # optional: every_request | user_turn | new_session
+# decision_timeout_ms = 800       # optional: deadline for the decision call
+
+[routes.echo]
+id = "echo"
+type = "noop"                      # replies OK without calling a model; good for smoke tests

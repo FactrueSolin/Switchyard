@@ -307,7 +307,7 @@ impl SwitchyardRuntime {
         }
     }
 
-    fn route(&self, request: &Request) -> Option<&Route> {
+    fn route(&self, request: &Request) -> Option<Arc<Route>> {
         request
             .llm_request
             .model

@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "switchyard-control"
+version.workspace = true
+description = "Control plane for Switchyard decision-model routing deployments"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "switchyard-control"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+humantime = "2.4"
+include_dir.workspace = true
+libsy = { package = "switchyard-libsy", path = "../libsy", version = "0.3.0" }
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+switchyard-llm-client.workspace = true
+switchyard-runner.workspace = true
+switchyard-server.workspace = true
+tokio.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tokio.workspace = true
+tower = { version = "0.5", features = ["util"] }
+wiremock = "0.6"
