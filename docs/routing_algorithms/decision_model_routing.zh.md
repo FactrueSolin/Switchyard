@@ -8,7 +8,7 @@
 
 ## 配置决策模型路由
 
-决策模型的客户端直接写在路由表里，不使用 `[llm_clients]`，因为它的端点不是 chat-completions 端点。
+决策模型的客户端不使用 `[llm_clients]`，因为它的端点不是 chat-completions 端点。两种配置方式二选一：直接写在路由表里，或者在 `[decision_models.<name>]` 里定义一个命名条目，用 `decision = "<name>"` 引用。
 
 ```toml
 schema_version = 1
@@ -32,13 +32,33 @@ type = "decision_model"
 strong_target = "strong"
 weak_target = "weak"
 default_target = "weak"
-decision_base_url = "https://{workspace-id}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-decision_api_key_env = "DASHSCOPE_API_KEY"
+decision_base_url = "https://api.typesafe.ai/v1"
+decision_api_key_env = "TYPESAFE_API_KEY"
+decision_model = "jev-latest"
 classify_trigger = "every_request"
 ```
 
-`decision_base_url` 是服务商的 OpenAI 兼容根地址。Runner 会在它后面拼上
-`/systemone`。把 `{workspace-id}` 换成你的工作空间 ID。
+`decision_base_url` 是服务商的 OpenAI 兼容 `v1` 根地址。Runner 会在它后面拼上
+`/systemone`。可以用任何 System One 服务商的根地址——`https://api.typesafe.ai/v1`、
+DashScope 工作空间 `https://{workspace-id}.{region}.maas.aliyuncs.com/compatible-mode/v1`，
+或 LiteLLM 代理 `{base}/typesafe`。`decision_model` 是服务商在 `/v1/models` 列出的模型名。
+
+命名形式可以把一个端点定义给多条路由共用：
+
+```toml
+[decision_models.typesafe]
+base_url = "https://api.typesafe.ai/v1"
+model = "jev-latest"
+api_key_env = "TYPESAFE_API_KEY"
+
+[routes.smart]
+id = "smart"
+type = "decision_model"
+strong_target = "strong"
+weak_target = "weak"
+default_target = "weak"
+decision = "typesafe"
+```
 
 目标表的名字是本地引用。`id` 的值才是发给上游服务商的模型标识。路由的
 `id`（这里是 `smart`）是客户端发给 Switchyard 的模型名。
@@ -122,7 +142,7 @@ reasoning 块、工具调用的参数 JSON。
 
 ```json
 {
-  "model": "decision-model-preview",
+  "model": "jev-latest",
   "state": "<上面那段文本，原样一个字符串>",
   "questions": {
     "tier": {
@@ -138,10 +158,10 @@ reasoning 块、工具调用的参数 JSON。
 }
 ```
 
-字段名 `model`、`state`、`tier`、`type`、`instructions`、`criteria` 是服务商
-协议固定的，不能改；只有值可以自由写。值可以是模型能读的任何语言：当前的
-决策模型是 Qwen 系，中英文都能理解，所以 `criteria` 的措辞可以换成中文。
-选项名 `strong`、`weak`、`other` 是路由约定：路由器把它们映射到
+字段名 `model`、`state`、`tier`、`type`、`instructions`、`criteria` 是所有服务商
+共享的 System One 协议固定的，不能改；只有值可以自由写。值可以是模型能读的
+任何语言，所以 `criteria` 的措辞用你选的决策模型最擅长的语言即可。选项名
+`strong`、`weak`、`other` 是路由约定：路由器把它们映射到
 `strong_target`、`weak_target` 和默认目标。改选项名会让路由认不出来，除非
 同步修改代码里的常量。
 
@@ -149,7 +169,7 @@ reasoning 块、工具调用的参数 JSON。
 
 ```json
 {
-  "model": "decision-model-preview",
+  "model": "jev-1.13.0",
   "request_id": "6013f066-ae1a-94c2-bb3f-ccb7c80eeb94",
   "answers": {
     "tier": {

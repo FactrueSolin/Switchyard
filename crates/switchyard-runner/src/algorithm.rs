@@ -363,12 +363,18 @@ pub enum AlgorithmSpec {
         weak_target: String,
         /// Target used when the decision is low-confidence or the call fails.
         default_target: String,
-        /// The provider's OpenAI-compatible root, e.g.
-        /// `https://{workspace}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`.
-        decision_base_url: String,
+        /// Name of a `[decision_models.<name>]` entry supplying the endpoint.
+        /// Mutually exclusive with the three inline `decision_*` fields.
+        #[serde(default)]
+        decision: Option<String>,
+        /// The provider's System One endpoint root (an OpenAI-compatible
+        /// `v1` root), e.g. `https://api.typesafe.ai/v1`.
+        #[serde(default)]
+        decision_base_url: Option<String>,
         /// Environment variable holding the decision model's API key.
-        decision_api_key_env: String,
-        /// The decision model name. Defaults to `decision-model-preview`.
+        #[serde(default)]
+        decision_api_key_env: Option<String>,
+        /// The decision model name sent to the provider.
         #[serde(default)]
         decision_model: Option<String>,
         /// Lowest probability for a tier option that still routes that tier,
@@ -1489,6 +1495,7 @@ fn build_algorithm(
             strong_target,
             weak_target,
             default_target,
+            decision,
             decision_base_url,
             decision_api_key_env,
             decision_model,
@@ -1501,6 +1508,28 @@ fn build_algorithm(
             let strong = resolve_target_model_id(route_name, strong_target, targets)?;
             let weak = resolve_target_model_id(route_name, weak_target, targets)?;
             let default = resolve_target_model_id(route_name, default_target, targets)?;
+            // Deployment loading resolves `decision` against `[decision_models]`
+            // before building, so a reference here means it was built directly.
+            if let Some(name) = decision {
+                return Err(AlgorithmConfigError::new(format!(
+                    "decision_model route {route_name}: unresolved decision model reference {name}"
+                )));
+            }
+            let decision_base_url = decision_base_url.as_deref().ok_or_else(|| {
+                AlgorithmConfigError::new(format!(
+                    "decision_model route {route_name}: set decision or decision_base_url"
+                ))
+            })?;
+            let decision_api_key_env = decision_api_key_env.as_deref().ok_or_else(|| {
+                AlgorithmConfigError::new(format!(
+                    "decision_model route {route_name}: set decision or decision_api_key_env"
+                ))
+            })?;
+            let decision_model = decision_model.as_deref().ok_or_else(|| {
+                AlgorithmConfigError::new(format!(
+                    "decision_model route {route_name}: set decision or decision_model"
+                ))
+            })?;
             if decision_base_url.trim().is_empty() {
                 return Err(AlgorithmConfigError::new(format!(
                     "decision_model route {route_name}: decision_base_url must not be empty"
@@ -1522,9 +1551,7 @@ fn build_algorithm(
             let caller: Arc<dyn DecisionCaller> = Arc::new(
                 DecisionModelClient::new(
                     decision_base_url,
-                    decision_model
-                        .clone()
-                        .unwrap_or_else(|| "decision-model-preview".to_string()),
+                    decision_model,
                     Some(api_key),
                     decision_timeout_ms.map(Duration::from_millis),
                 )

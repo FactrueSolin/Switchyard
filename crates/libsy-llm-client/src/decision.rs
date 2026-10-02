@@ -4,7 +4,8 @@
 //! HTTP client for a decision model: one POST returns typed choices with
 //! probability distributions in a single forward pass, without generating text.
 //!
-//! The wire protocol is the provider's `/compatible-mode/v1/systemone` endpoint.
+//! The wire protocol is the provider's System One `/systemone` endpoint,
+//! reached by appending `/systemone` to an OpenAI-compatible `v1` root.
 
 use std::time::Duration;
 
@@ -57,7 +58,8 @@ impl std::fmt::Debug for DecisionModelClient {
 impl DecisionModelClient {
     /// Builds a client for the `systemone` endpoint under `base_url`.
     ///
-    /// `base_url` is the provider's OpenAI-compatible root, such as
+    /// `base_url` is the provider's OpenAI-compatible `v1` root, such as
+    /// `https://api.typesafe.ai/v1` or
     /// `https://{workspace}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`.
     ///
     /// # Errors

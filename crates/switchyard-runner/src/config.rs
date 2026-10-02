@@ -59,6 +59,9 @@ pub(crate) struct DeploymentConfig {
     fallback_client: Option<String>,
     #[serde(default)]
     llm_clients: BTreeMap<String, LlmClientConfig>,
+    /// Named decision-model endpoints routes can reference by `decision = "name"`.
+    #[serde(default)]
+    decision_models: BTreeMap<String, DecisionModelRef>,
     targets: BTreeMap<String, TargetConfig>,
     routes: BTreeMap<String, RouteConfig>,
 }
@@ -162,6 +165,15 @@ impl DeploymentConfig {
             )));
         }
 
+        for (name, entry) in &self.decision_models {
+            validate_value("decision model name", name)?;
+            validate_value(&format!("decision model {name} model"), &entry.model)?;
+            validate_value(
+                &format!("decision model {name} api_key_env"),
+                &entry.api_key_env,
+            )?;
+        }
+
         let mut route_names_by_id = HashMap::new();
         for (route_name, config) in &self.routes {
             validate_value("route name", route_name)?;
@@ -228,8 +240,10 @@ impl DeploymentConfig {
                     "route {route_name} context_window must be greater than zero"
                 )));
             }
-            let algorithm = config
-                .algorithm
+            let resolved = self.resolve_decision_ref(route_name, &config.algorithm)?;
+            let algorithm = resolved
+                .as_ref()
+                .unwrap_or(&config.algorithm)
                 .build(route_name, &targets)
                 .map_err(|error| RunnerError::configuration_source(error.to_string(), error))?;
             let (route_clients, caller_auth) =
@@ -267,6 +281,59 @@ impl DeploymentConfig {
             .with_fallback_url(fallback_base_url)
             .with_provider_api_keys(provider_api_keys);
         Ok(runner)
+    }
+
+    /// Fills a route's `decision` reference from the `[decision_models]` table.
+    ///
+    /// Returns `None` when the route needs no resolution; the caller then
+    /// builds the spec as written.
+    fn resolve_decision_ref(
+        &self,
+        route_name: &str,
+        spec: &AlgorithmSpec,
+    ) -> RunnerResult<Option<AlgorithmSpec>> {
+        let AlgorithmSpec::DecisionModel {
+            decision: Some(name),
+            decision_base_url,
+            decision_api_key_env,
+            decision_model,
+            strong_target,
+            weak_target,
+            default_target,
+            confidence_threshold,
+            classify_trigger,
+            message_hash_fallback,
+            recent_turn_window,
+            decision_timeout_ms,
+        } = spec
+        else {
+            return Ok(None);
+        };
+        if decision_base_url.is_some() || decision_api_key_env.is_some() || decision_model.is_some()
+        {
+            return Err(RunnerError::configuration(format!(
+                "decision_model route {route_name}: decision conflicts with inline decision_base_url, decision_model, or decision_api_key_env; use one form"
+            )));
+        }
+        let entry = self.decision_models.get(name).ok_or_else(|| {
+            RunnerError::configuration(format!(
+                "decision_model route {route_name}: unknown decision model {name}"
+            ))
+        })?;
+        Ok(Some(AlgorithmSpec::DecisionModel {
+            decision: None,
+            decision_base_url: Some(entry.base_url.as_str().to_string()),
+            decision_api_key_env: Some(entry.api_key_env.clone()),
+            decision_model: Some(entry.model.clone()),
+            strong_target: strong_target.clone(),
+            weak_target: weak_target.clone(),
+            default_target: default_target.clone(),
+            confidence_threshold: *confidence_threshold,
+            classify_trigger: *classify_trigger,
+            message_hash_fallback: *message_hash_fallback,
+            recent_turn_window: *recent_turn_window,
+            decision_timeout_ms: *decision_timeout_ms,
+        }))
     }
 
     fn build_clients(
@@ -595,6 +662,19 @@ struct TargetConfig {
     /// Reasoning effort forced on every request to this target, replacing the caller's value.
     /// Only meaningful on `openai_chat` and `openai_responses` clients.
     reasoning_effort: Option<String>,
+}
+
+/// A named decision-model endpoint from the `[decision_models]` table.
+///
+/// Routes reference one by `decision = "name"` instead of repeating the
+/// three inline `decision_*` fields. Resolved into those fields before the
+/// algorithm builds, so the runner sees one decision-model shape.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DecisionModelRef {
+    base_url: HttpBaseUrl,
+    model: String,
+    api_key_env: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -931,10 +1011,10 @@ classify_trigger = "new_session""#,
         // would be indistinguishable from that tier, and delegated work would follow the
         // parent's ordering instead of its own configured target.
         let runner = runner_from_toml(&with_subagent_passthrough(&stage_config(), "stage"))?;
-        let models = runner
+        let route = runner
             .route("switchyard/stage")
-            .expect("stage route should exist")
-            .models();
+            .expect("stage route should exist");
+        let models = route.models();
 
         assert_eq!(
             models.subagent_models_for(&Category::Any),
@@ -1858,8 +1938,9 @@ type = "decision_model"
 strong_target = "strong"
 weak_target = "weak"
 default_target = "weak"
-decision_base_url = "https://ws.example.test/compatible-mode/v1"
+decision_base_url = "https://api.example.test/v1"
 decision_api_key_env = "{key_env}"
+decision_model = "decision-model-preview"
 "#
         )
     }
@@ -1893,7 +1974,7 @@ decision_api_key_env = "{key_env}"
         }
 
         let empty_base = decision_model_config(DECISION_KEY_ENV_B).replace(
-            "decision_base_url = \"https://ws.example.test/compatible-mode/v1\"",
+            "decision_base_url = \"https://api.example.test/v1\"",
             "decision_base_url = \"\"",
         );
         assert!(error_message(&empty_base).contains("decision_base_url must not be empty"));
@@ -1923,8 +2004,78 @@ default_target = \"weak\"",
         );
         assert!(error_message(&unknown_field).contains("flavor"));
 
+        let missing_model = decision_model_config(DECISION_KEY_ENV_B)
+            .replace("decision_model = \"decision-model-preview\"\n", "");
+        assert!(error_message(&missing_model).contains("decision_model"));
+
         unsafe {
             std::env::remove_var(DECISION_KEY_ENV_B);
+        }
+    }
+
+    const DECISION_KEY_ENV_C: &str = "SWITCHYARD_CONFIG_TEST_DECISION_KEY_C";
+    const DECISION_KEY_ENV_D: &str = "SWITCHYARD_CONFIG_TEST_DECISION_KEY_D";
+
+    fn decision_ref_config(key_env: &str) -> String {
+        format!(
+            r#"{VALID_CONFIG}
+[decision_models.judge]
+base_url = "https://api.example.test/v1"
+model = "decision-model-preview"
+api_key_env = "{key_env}"
+
+[routes.decision]
+id = "switchyard/decision"
+type = "decision_model"
+strong_target = "strong"
+weak_target = "weak"
+default_target = "weak"
+decision = "judge"
+"#
+        )
+    }
+
+    #[test]
+    fn decision_model_named_reference_builds() -> RunnerResult<()> {
+        unsafe {
+            std::env::set_var(DECISION_KEY_ENV_C, "test-key");
+        }
+        let result = runner_from_toml(&decision_ref_config(DECISION_KEY_ENV_C));
+        unsafe {
+            std::env::remove_var(DECISION_KEY_ENV_C);
+        }
+        let runner = result?;
+        let ids: Vec<_> = runner.models().map(|model| model.id.as_str()).collect();
+        assert!(ids.contains(&"switchyard/decision"));
+        Ok(())
+    }
+
+    #[test]
+    fn decision_model_named_reference_validates_its_settings() {
+        unsafe {
+            std::env::set_var(DECISION_KEY_ENV_D, "test-key");
+        }
+
+        let unknown_ref = decision_ref_config(DECISION_KEY_ENV_D)
+            .replace("decision = \"judge\"", "decision = \"missing\"");
+        assert!(error_message(&unknown_ref).contains("unknown decision model missing"));
+
+        let conflicting = decision_ref_config(DECISION_KEY_ENV_D).replace(
+            "decision = \"judge\"",
+            "decision = \"judge\"\ndecision_base_url = \"https://api.example.test/v1\"",
+        );
+        assert!(error_message(&conflicting).contains("decision conflicts with inline"));
+
+        let no_decision_at_all =
+            decision_ref_config(DECISION_KEY_ENV_D).replace("decision = \"judge\"\n", "");
+        assert!(error_message(&no_decision_at_all).contains("set decision or decision_base_url"));
+
+        let empty_registry_model = decision_ref_config(DECISION_KEY_ENV_D)
+            .replace("model = \"decision-model-preview\"", "model = \"  \"");
+        assert!(error_message(&empty_registry_model).contains("decision model judge model"));
+
+        unsafe {
+            std::env::remove_var(DECISION_KEY_ENV_D);
         }
     }
 

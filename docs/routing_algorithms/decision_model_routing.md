@@ -11,9 +11,10 @@ Configure it with `type = "decision_model"`.
 
 ## Configure a decision-model route
 
-The decision model client is configured inline in the route table. It does not
-use `[llm_clients]`, because the provider endpoint is not a chat-completions
-endpoint.
+The decision model client does not use `[llm_clients]`, because the provider
+endpoint is not a chat-completions endpoint. Configure it either inline in the
+route table, or as a named `[decision_models.<name>]` entry the route
+references with `decision = "<name>"`. The two forms are mutually exclusive.
 
 ```toml
 schema_version = 1
@@ -37,13 +38,35 @@ type = "decision_model"
 strong_target = "strong"
 weak_target = "weak"
 default_target = "weak"
-decision_base_url = "https://{workspace-id}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-decision_api_key_env = "DASHSCOPE_API_KEY"
+decision_base_url = "https://api.typesafe.ai/v1"
+decision_api_key_env = "TYPESAFE_API_KEY"
+decision_model = "jev-latest"
 classify_trigger = "every_request"
 ```
 
-`decision_base_url` is the provider's OpenAI-compatible root. The runner appends
-`/systemone` to it. Replace `{workspace-id}` with your workspace ID.
+`decision_base_url` is the provider's OpenAI-compatible `v1` root. The runner
+appends `/systemone` to it. Use the root for whatever System One provider you
+use — `https://api.typesafe.ai/v1`, a DashScope workspace
+`https://{workspace-id}.{region}.maas.aliyuncs.com/compatible-mode/v1`, or a
+LiteLLM proxy `{base}/typesafe`. `decision_model` is the model name the
+provider lists at `/v1/models`.
+
+The named form keeps one endpoint definition shared by several routes:
+
+```toml
+[decision_models.typesafe]
+base_url = "https://api.typesafe.ai/v1"
+model = "jev-latest"
+api_key_env = "TYPESAFE_API_KEY"
+
+[routes.smart]
+id = "smart"
+type = "decision_model"
+strong_target = "strong"
+weak_target = "weak"
+default_target = "weak"
+decision = "typesafe"
+```
 
 The target table names are local references. Their `id` values are the model
 identifiers sent to the upstream provider. The route's `id`, `smart`, is the
@@ -140,7 +163,7 @@ The full request is one JSON POST to `{decision_base_url}/systemone`:
 
 ```json
 {
-  "model": "decision-model-preview",
+  "model": "jev-latest",
   "state": "<the transcript above, one string>",
   "questions": {
     "tier": {
@@ -157,10 +180,10 @@ The full request is one JSON POST to `{decision_base_url}/systemone`:
 ```
 
 The field names `model`, `state`, `tier`, `type`, `instructions`, and
-`criteria` are fixed by the provider's protocol. Only their values are free
-text. The values can be in any language the model reads: the current decision
-model is a Qwen model that handles English and Chinese, so the `criteria`
-text can be rewritten in either. The option names `strong`, `weak`, and
+`criteria` are fixed by the System One wire protocol shared by every provider.
+Only their values are free text. The values can be in any language the model
+reads, so the `criteria` text can be written in whatever language the
+decision model you chose handles best. The option names `strong`, `weak`, and
 `other` are the routing contract: the router maps them to `strong_target`,
 `weak_target`, and the default target. Renaming an option breaks the mapping
 unless the code is changed to match.
@@ -169,7 +192,7 @@ A real response:
 
 ```json
 {
-  "model": "decision-model-preview",
+  "model": "jev-1.13.0",
   "request_id": "6013f066-ae1a-94c2-bb3f-ccb7c80eeb94",
   "answers": {
     "tier": {

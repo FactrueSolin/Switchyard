@@ -123,6 +123,33 @@ model ID as that route's judge or reviewer because those calls would otherwise b
 at the client boundary; Switchyard rejects that configuration when it loads.
 Token-count requests do not apply target system prompts.
 
+## `[decision_models.<name>]`
+
+A named decision-model endpoint. `decision_model` routes reference one by
+`decision = "<name>"` instead of repeating the three inline `decision_*`
+fields. The registry is optional; inline fields keep working unchanged.
+
+| Key | Required | Default | Meaning |
+|---|:---:|---|---|
+| `base_url` | Yes | — | The provider's OpenAI-compatible `v1` root for its System One endpoint, e.g. `https://api.typesafe.ai/v1`. The runner appends `/systemone`. |
+| `model` | Yes | — | The decision model name sent in the request body, as listed by the provider's `/v1/models`. |
+| `api_key_env` | Yes | — | Environment variable holding the decision model's API key. Must name a set, non-empty variable. |
+
+```toml
+[decision_models.typesafe-27b]
+base_url = "https://api.typesafe.ai/v1"
+model = "qwen3.8-27b"
+api_key_env = "TYPESAFE_API_KEY"
+
+[routes.weak-strong]
+id = "switchyard/weak-strong"
+type = "decision_model"
+strong_target = "strong"
+weak_target = "weak"
+default_target = "weak"
+decision = "typesafe-27b"
+```
+
 ## `[routes.<name>]`
 
 Every route takes the common keys below, plus the keys for its type.
@@ -297,8 +324,10 @@ mode, or in the prompt in `json_object` mode.
 
 Picks the efficient or capable model with a dedicated decision model. The
 model answers a fixed choice question in one forward pass without generating
-text. The decision call is configured inline in the route table; it does not
-use `[llm_clients]`. See
+text. The decision call does not use `[llm_clients]`. Point the route at a
+named `[decision_models.<name>]` entry with `decision`, or configure the
+endpoint inline with the three `decision_*` fields; the two forms are mutually
+exclusive. See
 [Decision-Model Routing](../routing_algorithms/decision_model_routing.md).
 
 | Key | Required | Default | Meaning |
@@ -306,9 +335,10 @@ use `[llm_clients]`. See
 | `strong_target` | Yes | — | High-intelligence tier. |
 | `weak_target` | Yes | — | Cost-efficient tier. Must differ from `strong_target`. |
 | `default_target` | Yes | — | Target used when the decision is low-confidence or the call fails. |
-| `decision_base_url` | Yes | — | The provider's OpenAI-compatible root, e.g. `https://{workspace}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`. The runner appends `/systemone`. |
-| `decision_api_key_env` | Yes | — | Environment variable holding the decision model's API key. Must name a set, non-empty variable. |
-| `decision_model` | No | `decision-model-preview` | Model name sent in the request body. |
+| `decision` | One form | — | Name of a `[decision_models.<name>]` entry supplying `base_url`, `model`, and `api_key_env`. Mutually exclusive with the three inline fields below. |
+| `decision_base_url` | One form | — | The provider's OpenAI-compatible `v1` root for its System One endpoint, e.g. `https://api.typesafe.ai/v1`. The runner appends `/systemone`. |
+| `decision_api_key_env` | One form | — | Environment variable holding the decision model's API key. Must name a set, non-empty variable. |
+| `decision_model` | One form | — | The decision model name sent in the request body, as listed by the provider's `/v1/models`. |
 | `confidence_threshold` | No | unset | Lowest probability for a tier option in the decision model's distribution that still routes that tier. The router reads `P(strong)` and `P(weak)` from the returned distribution; it does not use the API's reported confidence, which does not track the distribution. In `[0, 1]`. Unset trusts the decision model's own pick: its chosen option routes directly, and only `other` falls to `default_target`. |
 | `classify_trigger` | No | `every_request` | When the decision model runs. `every_request` decides every request, tool continuations included. `user_turn` decides each new user message and keeps that target across intervening tool calls only when requests carry a session ID; without a session ID, it behaves like `every_request`. `new_session` decides once and reuses that target for the session. |
 | `message_hash_fallback` | No | `false` | Retains the target against a hash of the first user message when a request carries no session ID. Requires `classify_trigger = "new_session"` or `"user_turn"`. |
